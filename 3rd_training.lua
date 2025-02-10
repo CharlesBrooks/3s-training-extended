@@ -1166,7 +1166,6 @@ function update_blocking(_input, _player, _dummy, _mode, _style, _red_parry_hit_
 
             -- Apply the blocking decision
             _dummy.blocking.should_block = _should_block
-            _dummy.blocking.randomized_out = false
 
             if _debug then
               print(string.format(" %d: next hit %d at frame %d (%d), last hit %d", frame_number, _dummy.blocking.expected_attack_hit_id, _predicted_hit.frame, _dummy.blocking.expected_attack_animation_hit_frame, _dummy.blocking.last_attack_hit_id))
