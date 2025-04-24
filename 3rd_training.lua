@@ -487,6 +487,7 @@ blocking_mode =
   "always",
   "first hit",
   "random",
+  "after first hit",
 }
 
 tech_throws_mode =
@@ -850,6 +851,40 @@ function update_blocking(_input, _player, _dummy, _mode, _style, _red_parry_hit_
   _dummy.blocking.last_attack_hit_id = _dummy.blocking.last_attack_hit_id or 0
   _dummy.blocking.is_bypassing_freeze_frames = _dummy.blocking.is_bypassing_freeze_frames or false
   _dummy.blocking.bypassed_freeze_frames = _dummy.blocking.bypassed_freeze_frames or 0
+  _dummy.blocking.has_been_hit_this_sequence = _dummy.blocking.has_been_hit_this_sequence or false
+  _dummy.blocking.idle_buffer_frames = _dummy.blocking.idle_buffer_frames or 0
+
+  -- Reset the hit sequence state when dummy returns to idle
+  if _dummy.is_idle and _dummy.recovery_time == 0 and _dummy.remaining_freeze_frames == 0 then
+    if _dummy.blocking.has_been_hit_this_sequence then
+      _dummy.blocking.idle_buffer_frames = _dummy.blocking.idle_buffer_frames + 1
+      if _debug then
+        print(string.format("%d - Counting idle buffer frames: %d/12",
+          frame_number,
+          _dummy.blocking.idle_buffer_frames))
+      end
+      if _dummy.blocking.idle_buffer_frames >= 12 then -- Testing with a 12 frame buffer
+        if _debug then
+          print(string.format("%d - Dummy returned to idle after buffer, resetting hit sequence (recovery: %d, freeze: %d)",
+            frame_number,
+            _dummy.recovery_time,
+            _dummy.remaining_freeze_frames))
+        end
+        _dummy.blocking.has_been_hit_this_sequence = false
+        _dummy.blocking.idle_buffer_frames = 0
+      end
+    end
+  else
+    _dummy.blocking.idle_buffer_frames = 0
+  end
+
+  -- Set the hit sequence state when dummy gets hit
+  if _dummy.has_just_been_hit then
+    _dummy.blocking.has_been_hit_this_sequence = true
+    if _debug then
+      print(string.format("%d - Dummy just got hit, marking sequence", frame_number))
+    end
+  end
 
   function stop_listening_hits(_player_obj)
     _dummy.blocking.listening = false
@@ -1086,9 +1121,12 @@ function update_blocking(_input, _player, _dummy, _mode, _style, _red_parry_hit_
             _dummy.blocking.is_precise_timing = false
             log(_dummy.prefix, "blocking", string.format("block in %d", _dummy.blocking.expected_attack_animation_hit_frame - _player_relevant_animation_frame))
 
+            -- Default to blocking
+            local _should_block = true
             if _mode == 3 then -- first hit
               if not _dummy.blocking.block_string and not _dummy.blocking.wait_for_block_string then
-                _dummy.blocking.should_block = false
+                _dummy.blocking.should_block_projectile = false
+                _should_block = false
               end
             elseif _mode == 4 then -- random
               if not _dummy.blocking.block_string then
@@ -1100,7 +1138,34 @@ function update_blocking(_input, _player, _dummy, _mode, _style, _red_parry_hit_
                   end
                 end
               end
+            elseif _mode == 5 then -- after first hit
+              if _dummy.blocking.has_been_hit_this_sequence then
+                -- After being hit once, enable blocking for all subsequent hits
+                _should_block = true
+                _dummy.blocking.block_string = true
+                _dummy.blocking.wait_for_block_string = false
+                if _debug then
+                  print(string.format("%d - In hit sequence, enabling blocking (block_string: %s, should_block: %s)",
+                    frame_number, 
+                    tostring(_dummy.blocking.block_string),
+                    tostring(_should_block)))
+                end
+              else
+                -- Allow the first hit through
+                _should_block = false
+                _dummy.blocking.block_string = false
+                _dummy.blocking.wait_for_block_string = false
+                if _debug then
+                  print(string.format("%d - No hit sequence yet, allowing through (block_string: %s, should_block: %s)",
+                    frame_number,
+                    tostring(_dummy.blocking.block_string),
+                    tostring(_should_block)))
+                end
+              end
             end
+
+            -- Apply the blocking decision
+            _dummy.blocking.should_block = _should_block
 
             if _debug then
               print(string.format(" %d: next hit %d at frame %d (%d), last hit %d", frame_number, _dummy.blocking.expected_attack_hit_id, _predicted_hit.frame, _dummy.blocking.expected_attack_animation_hit_frame, _dummy.blocking.last_attack_hit_id))
@@ -1171,24 +1236,54 @@ function update_blocking(_input, _player, _dummy, _mode, _style, _red_parry_hit_
             _dummy.blocking.has_pre_parried = false
             _dummy.blocking.projectile_hit_frame = frame_number + _i
             _dummy.blocking.expected_projectile = _projectile_obj
+            _dummy.blocking.has_pre_parried = false
             _dummy.blocking.is_precise_timing = _movement ~= nil
             log(_dummy.prefix, "blocking", string.format("block proj %s in %d", _projectile_obj.id, _i))
+
+            -- Default to blocking
+            local _should_block = true
 
             if _mode == 3 then -- first hit
               if not _dummy.blocking.block_string and not _dummy.blocking.wait_for_block_string then
                 _dummy.blocking.should_block_projectile = false
+                _should_block = false
               end
             elseif _mode == 4 then -- random
               if not _dummy.blocking.block_string then
                 local _r = math.random()
                 if _r > 0.5 then
                   _dummy.blocking.projectile_randomized_out = true
-                  if _debug then
-                    print(string.format(" %d: next hit randomized out", frame_number))
-                  end
+                end
+              end
+            elseif _mode == 5 then -- allow first hit
+              if _dummy.blocking.has_been_hit_this_sequence then
+                -- After being hit once, enable blocking for all subsequent hits
+                _should_block = true
+                _dummy.blocking.block_string = true
+                _dummy.blocking.wait_for_block_string = false
+                if _debug then
+                  print(string.format("%d - In hit sequence, enabling projectile blocking (block_string: %s, should_block: %s)", 
+                    frame_number, 
+                    tostring(_dummy.blocking.block_string), 
+                    tostring(_should_block)))
+                end
+              else
+                -- Allow the first hit through
+                _should_block = false
+                _dummy.blocking.block_string = false
+                _dummy.blocking.wait_for_block_string = false
+                if _debug then
+                  print(string.format("%d - No hit sequence yet, allowing projectile through (block_string: %s, should_block: %s)", 
+                    frame_number, 
+                    tostring(_dummy.blocking.block_string), 
+                    tostring(_should_block)))
                 end
               end
             end
+
+            -- Apply the blocking decision
+            _dummy.blocking.should_block_projectile = _should_block
+            _dummy.blocking.projectile_randomized_out = false
 
             break
           end
